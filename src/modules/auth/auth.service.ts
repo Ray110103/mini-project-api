@@ -3,8 +3,10 @@ import { JwtService } from "../jwt/jwt.service";
 import { MailService } from "../mail/mail.service";
 import { PasswordService } from "../password/password.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { ForgotPasswordDTO } from "./dto/forgot-password.dto";
 import { LoginDTO } from "./dto/login.dto";
 import { RegisterDTO } from "./dto/register.dto";
+import { ResetPasswordDTO } from "./dto/reset-password.dto";
 
 export class AuthService {
   private prisma: PrismaService;
@@ -25,21 +27,11 @@ export class AuthService {
     });
 
     if (user) {
-      throw new ApiError("Email Already EXist", 400);
+      throw new ApiError("email already used", 400);
     }
 
     const hashedPassword = await this.passwordService.hashPassword(
       body.password
-    );
-
-    await this.mailService.sendMail(
-      body.email, // kirim ke siapa
-      "Thank You For Registering !", // subject / judul email
-      "welcome", // nama di folder mail / templates
-      {
-        name: body.name,
-        year: new Date().getFullYear(),
-      } // context -> atau data  yang dimasukkan ke dalam template emailnya
     );
 
     return await this.prisma.user.create({
@@ -48,6 +40,7 @@ export class AuthService {
         email: body.email,
         password: hashedPassword,
       },
+
       omit: { password: true },
     });
   };
@@ -58,7 +51,7 @@ export class AuthService {
     });
 
     if (!user) {
-      throw new ApiError("Invalid Crdenetials", 400);
+      throw new ApiError("Invalid Credentials", 400);
     }
 
     const isPasswordValid = await this.passwordService.comparePassword(
@@ -70,16 +63,71 @@ export class AuthService {
       throw new ApiError("Invalid Credentials", 400);
     }
 
-    const payload = { id: user.id, role: user.role };
+    const payload = { id: user.id };
 
-    const accesToken = this.jwtService.generateToken(
+    const accessToken = this.jwtService.generateToken(
       payload,
       process.env.JWT_SECRET!,
       { expiresIn: "2h" }
     );
 
-    const { password, ...userWithOutPassword } = user;
+    const { password, ...userWithoutPassword } = user;
 
-    return { ...userWithOutPassword, accesToken };
+    return { ...userWithoutPassword, accessToken };
+  };
+
+  forgotPassword = async (body: ForgotPasswordDTO) => {
+    const user = await this.prisma.user.findFirst({
+      where: { email: body.email },
+    });
+
+    if (!user) {
+      throw new ApiError("Invalid Credentials", 400);
+    }
+
+    const payload = { id: user.id };
+
+    const token = this.jwtService.generateToken(
+      payload,
+      process.env.JWT_SECRET_RESET!,
+      { expiresIn: "15m" }
+    );
+
+    const resetLink = `http://localhost:3000/reset-password/${token}`;
+
+    await this.mailService.sendMail(
+      body.email,
+      "Reset Your Password",
+      "forgot-password",
+      {
+        name: user.name,
+        resetLink: resetLink,
+        expiryMinutes: "15",
+        year: new Date().getFullYear(),
+      }
+    );
+
+    return { message: "Send Email Success" };
+  };
+
+  resetPassword = async (body: ResetPasswordDTO, authUserId: number) => {
+    const user = await this.prisma.user.findFirst({
+      where: { id: authUserId },
+    });
+
+    if (!user) {
+      throw new ApiError("User Not Found", 400);
+    }
+
+    const hashedPassword = await this.passwordService.hashPassword(
+      body.password
+    );
+
+    await this.prisma.user.update({
+      where: { id: authUserId },
+      data: { password: hashedPassword },
+    });
+
+    return { messaGE: "Reset Password Success" };
   };
 }
