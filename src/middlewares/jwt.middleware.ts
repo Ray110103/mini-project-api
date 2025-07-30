@@ -1,7 +1,6 @@
 import { NextFunction, Request, Response } from "express";
 import { TokenExpiredError, verify } from "jsonwebtoken";
 import { ApiError } from "../utils/api-error";
-import { Role } from "../generated/prisma";
 
 export class JwtMiddleware {
   verifyToken = (secretKey: string) => {
@@ -27,11 +26,11 @@ export class JwtMiddleware {
     };
   };
 
-  verifyRole = (roles: Role[]) => {
+  verifyRole = (allowedRoles: string[]) => {
     return (req: Request, res: Response, next: NextFunction) => {
-      const userRole = res.locals.user.role;
+      const user = res.locals.user;
 
-      if (!userRole || !roles.includes(userRole)) {
+      if (!user || !allowedRoles.includes(user.role)) {
         throw new ApiError("Forbidden", 403);
       }
 
