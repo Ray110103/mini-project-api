@@ -1,11 +1,11 @@
 import { Router } from "express";
 import { JwtMiddleware } from "../../middlewares/jwt.middleware";
-import { validateBody } from "../../middlewares/validation.middleware";
 import { CreateTransactionDTO } from "./dto/create-transaction.dto";
 import { TransactionController } from "./transaction.controller";
 import { UploadPaymentProofDTO } from "./dto/upload-payment-proof.dto";
 import { UploaderMiddleware } from "../../middlewares/uploader.middleware";
 import { UpdateTransactionDTO } from "./dto/update-transaction.dto";
+import { validateBody } from "../../middlewares/validate.middleware";
 
 export class TransactionRouter {
   private router: Router;
