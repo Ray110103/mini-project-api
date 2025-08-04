@@ -41,6 +41,19 @@ export class EventService {
     };
   };
 
+  getEventBySlug = async (slug: string) => {
+    const event = await this.prisma.event.findFirst({
+      where: { slug },
+    });
+
+    if (!event) {
+      throw new ApiError("Blog Not Found", 404);
+    }
+
+    return event;
+  };
+
+
   createEvent = async (
     body: CreateEventDTO,
     thumbnail: Express.Multer.File,

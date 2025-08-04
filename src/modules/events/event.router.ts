@@ -10,6 +10,7 @@ export class EventRouter {
   private eventController: EventController;
   private jwtMiddleware: JwtMiddleware;
   private uploaderMiddleware: UploaderMiddleware;
+  
   constructor() {
     this.router = Router();
     this.eventController = new EventController();
@@ -20,6 +21,7 @@ export class EventRouter {
 
   private initializedRoutes = () => {
     this.router.get("/", this.eventController.getEvents);
+    this.router.get("/:slug", this.eventController.getEventBySlug);
     this.router.post(
       "/",
       this.jwtMiddleware.verifyToken(process.env.JWT_SECRET!),
