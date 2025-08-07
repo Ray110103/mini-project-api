@@ -1,16 +1,15 @@
-import { Job, Worker } from "bullmq";
 import { connection } from "../../config/redis";
+import { Job, Worker } from "bullmq";
 import { PrismaService } from "../prisma/prisma.service";
 import { ApiError } from "../../utils/api-error";
 
 export class TransactionWorker {
   private worker: Worker;
   private prisma: PrismaService;
-
   constructor() {
     this.prisma = new PrismaService();
     this.worker = new Worker("transactionQueue", this.handleTransaction, {
-      connection: connection,
+      connection,
     });
   }
 
@@ -22,26 +21,26 @@ export class TransactionWorker {
     });
 
     if (!transaction) {
-      throw new ApiError("Invalid Transaction UUID", 400);
+      throw new ApiError("Invalid transaction UUID", 400);
     }
 
     if (transaction.status === "WAITING_FOR_PAYMENT") {
       await this.prisma.$transaction(async (tx) => {
-        // ubah status menjadi EXPIRED
+        // ubah status transaksi menjadi EXPIRED
         await tx.transaction.update({
           where: { uuid },
           data: { status: "EXPIRED" },
         });
 
-        // ambil semua transaction detail
+        //ambil semua transaction detail
         const transactionDetails = await tx.transactionDetail.findMany({
           where: { transactionId: transaction.id },
         });
 
-        // kembalikan stok produk berdasarkan transaction detail
+        //kembalikan stock ticket
         for (const detail of transactionDetails) {
-          await tx.product.update({
-            where: { id: detail.productId },
+          await tx.ticket.update({
+            where: { id: detail.ticketId },
             data: { stock: { increment: detail.qty } },
           });
         }

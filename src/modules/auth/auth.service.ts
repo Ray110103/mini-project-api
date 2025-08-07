@@ -63,7 +63,7 @@ export class AuthService {
       throw new ApiError("Invalid Credentials", 400);
     }
 
-    const payload = { id: user.id };
+    const payload = { id: user.id,role: user.role };
 
     const accessToken = this.jwtService.generateToken(
       payload,
@@ -128,6 +128,6 @@ export class AuthService {
       data: { password: hashedPassword },
     });
 
-    return { messaGE: "Reset Password Success" };
+    return { message: "Reset Password Success" };
   };
 }

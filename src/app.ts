@@ -6,6 +6,12 @@ import { AuthRouter } from "./modules/auth/auth.router";
 import { EventRouter } from "./modules/events/event.router";
 import { SampleRouter } from "./modules/sample/sample.router";
 import { initializedScheduler } from "./scripts";
+import { SettingsRouter } from "./settings/settings.router";
+import { VoucherRouter } from "./modules/voucher/voucher.router";
+import { TicketRouter } from "./modules/tickets/ticket.router";
+import { ProfileRouter } from "./modules/profile/profile.router";
+import { TransactionRouter } from "./modules/transaction/transaction.router";
+import { initializedWorkers } from "./workers";
 
 export class App {
   app: Express;
@@ -15,6 +21,7 @@ export class App {
     this.routes();
     this.handleError();
     // initializedScheduler();
+    initializedWorkers()
   }
 
   private configure() {
@@ -26,10 +33,21 @@ export class App {
     const sampleRouter = new SampleRouter();
     const eventRouter = new EventRouter();
     const authRouter = new AuthRouter();
+    const profileRouter = new ProfileRouter();
+    const transactionRouter = new TransactionRouter();
+    const ticketRouter = new TicketRouter();
+    const voucherRouter = new VoucherRouter();
+    const settingsRouter = new SettingsRouter();
+
 
     this.app.use("/samples", sampleRouter.getRouter());
     this.app.use("/events", eventRouter.getRouter());
     this.app.use("/auth", authRouter.getRouter());
+    this.app.use("/profile", profileRouter.getRouter());
+    this.app.use("/transactions", transactionRouter.getRouter());
+    this.app.use("/tickets", ticketRouter.getRouter());
+    this.app.use("/vouchers", voucherRouter.getRouter());
+    this.app.use("/settings", settingsRouter.getRouter());
   }
 
   private handleError() {

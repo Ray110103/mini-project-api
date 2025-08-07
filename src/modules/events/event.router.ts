@@ -2,15 +2,14 @@ import { Router } from "express";
 import { EventController } from "./event.controller";
 import { JwtMiddleware } from "../../middlewares/jwt.middleware";
 import { CreateEventDTO } from "./dto/create-event.dto";
-import { UploaderMiddleware } from "../../middlewares/uploader.middleware";
 import { validateBody } from "../../middlewares/validate.middleware";
+import { UploaderMiddleware } from "../../middlewares/uploader.middleware";
 
 export class EventRouter {
   private router: Router;
   private eventController: EventController;
   private jwtMiddleware: JwtMiddleware;
   private uploaderMiddleware: UploaderMiddleware;
-  
   constructor() {
     this.router = Router();
     this.eventController = new EventController();
@@ -25,6 +24,7 @@ export class EventRouter {
     this.router.post(
       "/",
       this.jwtMiddleware.verifyToken(process.env.JWT_SECRET!),
+      this.jwtMiddleware.verifyRole(["ADMIN"]),
       this.uploaderMiddleware
         .upload()
         .fields([{ name: "thumbnail", maxCount: 1 }]),

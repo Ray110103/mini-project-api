@@ -7,79 +7,143 @@ import { UpdateTransactionDTO } from "./dto/update-transaction.dto";
 import { TransactionQueue } from "./transaction.queue";
 
 export class TransactionService {
-  private prisma: PrismaService;
-  private transactionQueue: TransactionQueue;
-  private mailService: MailService;
-  private cloudinaryService: CloudinaryService;
+  private prisma = new PrismaService();
+  private transactionQueue = new TransactionQueue();
+  private mailService = new MailService();
+  private cloudinaryService = new CloudinaryService();
 
-  constructor() {
-    this.prisma = new PrismaService();
-    this.transactionQueue = new TransactionQueue();
-    this.mailService = new MailService();
-    this.cloudinaryService = new CloudinaryService();
-  }
+  getAdminTransactions = async ({
+    adminId,
+    take,
+    page,
+  }: {
+    adminId: number;
+    take: number;
+    page: number;
+  }) => {
+    const whereClause = {
+      event: {
+        adminId,
+        deletedAt: null,
+      },
+    };
+
+    const [transactions, total] = await this.prisma.$transaction([
+      this.prisma.transaction.findMany({
+        where: whereClause,
+        include: {
+          user: true,
+          event: true,
+          transactionDetail: true,
+        },
+        skip: (page - 1) * take,
+        take,
+        orderBy: { createdAt: "desc" },
+      }),
+      this.prisma.transaction.count({ where: whereClause }),
+    ]);
+
+    const data = transactions.map((tx) => {
+      const quantity = tx.transactionDetail.reduce((sum, d) => sum + d.qty, 0);
+      const totalTicketPrice = tx.transactionDetail.reduce(
+        (sum, d) => sum + d.qty * d.price,
+        0
+      );
+      const finalPrice = totalTicketPrice - (tx.pointsUsed || 0);
+
+      return {
+        uuid: tx.uuid,
+        eventName: tx.event.title,
+        Email: tx.user.email,
+        quantity,
+        totalTicketPrice,
+        voucherUsed: tx.couponUsed,
+        pointsUsed: tx.pointsUsed,
+        finalPrice,
+        status: tx.status,
+        paymentProof: tx.paymentProof,
+      };
+    });
+
+    return {
+      data,
+      meta: {
+        page,
+        take,
+        total,
+      },
+    };
+  };
+
+  getTransaction = async (uuid: string, authUserId: number) => {
+    const transaction = await this.prisma.transaction.findFirst({
+      where: {
+        uuid,
+        userId: authUserId,
+      },
+      include: {
+        event: true,
+        transactionDetail: { include: { ticket: true } },
+      },
+    });
+
+    if (!transaction) {
+      throw new ApiError("Transaction not found or access denied", 404);
+    }
+
+    return transaction;
+  };
 
   createTransaction = async (
     body: CreateTransactionDTO,
     authUserId: number
   ) => {
-    // validate product stock
-    // if stock less than quantity throw api error
-    // create data on model Transaction and model TransactionDetail
+    const payload = body.payload;
+    const ticketIds = payload.map((item) => item.ticketId);
 
-    const payload = body.payload; // [{productid: 1, qty: 1}, {productid: 2, qty: 4}]
-
-    // 1. get all product ID from payload
-    const productIds = payload.map((item) => item.productId); // [1,2]
-
-    // 2. fetch all products from DB
-    const products = await this.prisma.product.findMany({
-      where: {
-        id: { in: productIds },
-      },
+    const tickets = await this.prisma.ticket.findMany({
+      where: { id: { in: ticketIds } },
     });
 
-    // 3. validate product availability
     for (const item of payload) {
-      const product = products.find((p) => p.id === item.productId);
-
-      if (!product) {
-        throw new ApiError(`Product with ID ${item.productId} not found`, 400);
+      const ticket = tickets.find((t) => t.id === item.ticketId);
+      if (!ticket) {
+        throw new ApiError(`Ticket with ID ${item.ticketId} not found`, 400);
       }
-
-      if (product.stock < item.qty) {
-        throw new ApiError(`Insufficent Stock`, 400);
+      if (ticket.stock < item.qty) {
+        throw new ApiError(
+          `Insufficient stock for ticket ID ${item.ticketId}`,
+          400
+        );
       }
     }
 
     const result = await this.prisma.$transaction(async (tx) => {
-      // 4. create data Transaction
+      const eventId = tickets[0].eventId;
+
       const transaction = await tx.transaction.create({
-        data: { userId: authUserId }, // userId from token -> res.locals.user
+        data: {
+          userId: authUserId,
+          eventId,
+        },
         include: { user: true },
       });
 
-      // 5. prepare data transactionDetail
       const transactionDetails = payload.map((item) => {
-        const product = products.find((p) => p.id === item.productId)!;
-
+        const ticket = tickets.find((t) => t.id === item.ticketId)!;
         return {
           transactionId: transaction.id,
-          productId: product.id,
+          ticketId: item.ticketId,
           qty: item.qty,
-          price: product.price,
+          price: Math.floor(ticket.totalPrice),
         };
       });
 
-      // 6. createMany data transactionDetail based on variable transactionDetails
-      await tx.transactionDetail.createMany({
-        data: transactionDetails,
-      });
+      await tx.transactionDetail.createMany({ data: transactionDetails });
 
-      // 7/ update stock for each product
       for (const item of payload) {
-        await tx.product.update({
-          where: { id: item.productId },
+        await tx.ticket.update({
+          where: { id: item.ticketId },
           data: { stock: { decrement: item.qty } },
         });
       }
@@ -87,13 +151,11 @@ export class TransactionService {
       return transaction;
     });
 
-    // 8. Buat delay job untuk mengecek status transaksi selama 1 menit
     await this.transactionQueue.addNewTransactionQueue(result.uuid);
 
-    // kirim email untuk upload bukti bayar
     await this.mailService.sendMail(
       result.user.email,
-      "upload bukti pembayaran",
+      "Upload bukti pembayaran",
       "upload-proof",
       {
         name: result.user.name,
@@ -103,7 +165,7 @@ export class TransactionService {
       }
     );
 
-    return { message: "Create Transaction Success" };
+    return result;
   };
 
   uploadPaymentProof = async (
@@ -111,35 +173,25 @@ export class TransactionService {
     paymentProof: Express.Multer.File,
     authUserId: number
   ) => {
-    // harus tau terlebih dahulu transaksi nya
-    // harus user yang punya transaksi yang bisa upload payment proof
-
-    // Cari trabsaksi berdasarkan uui
     const transaction = await this.prisma.transaction.findFirst({
       where: { uuid },
     });
 
-    // Apabila transaksi tidak ada, thow error
-    if (!transaction) {
-      throw new ApiError("Transaction Not Found", 400);
-    }
-
-    // Apabila userId tidak sesuai di data transaksi dengan userId di dalam token
-    // throw error
-    if (transaction.userId !== authUserId) {
+    if (!transaction) throw new ApiError("Transaction not found!", 400);
+    if (transaction.userId !== authUserId)
       throw new ApiError("Unauthorized", 401);
-    }
 
-    // upload bukti transfer ke dalam cloudinary
     const { secure_url } = await this.cloudinaryService.upload(paymentProof);
 
-    // Update data di dalam  table transaksi, ubak kolom payment proof dan status
     await this.prisma.transaction.update({
       where: { uuid },
-      data: { paymentProof: secure_url, status: "WAITING_FOR_CONFIRMATION" },
+      data: {
+        paymentProof: secure_url,
+        status: "WAITING_FOR_CONFIRMATION",
+      },
     });
 
-    return { message: "Upload Payment Proof Success" };
+    return { message: "Upload payment proof success" };
   };
 
   updateTransaction = async (body: UpdateTransactionDTO) => {
@@ -147,10 +199,7 @@ export class TransactionService {
       where: { uuid: body.uuid },
     });
 
-    if (!transaction) {
-      throw new ApiError("Transaction not found!", 400);
-    }
-
+    if (!transaction) throw new ApiError("Transaction not found!", 404);
     if (transaction.status !== "WAITING_FOR_CONFIRMATION") {
       throw new ApiError(
         "Transaction status must be WAITING_FOR_CONFIRMATION",
@@ -161,25 +210,153 @@ export class TransactionService {
     await this.prisma.$transaction(async (tx) => {
       await tx.transaction.update({
         where: { uuid: body.uuid },
-        data: { status: body.type === "ACCEPT" ? "PAID" : "REJECT" },
+        data: {
+          status: body.type === "ACCEPT" ? "PAID" : "REJECT",
+          updatedAt: new Date(),
+        },
       });
 
       if (body.type === "REJECT") {
-        //ambil semua transaction detail
-        const transactionDetails = await tx.transactionDetail.findMany(
-          { where: { transactionId: transaction.id },
+        const details = await tx.transactionDetail.findMany({
+          where: { transactionId: transaction.id },
         });
 
-        //kembalikan stock produk berdasarkan transaction detail
-        for (const detail of transactionDetails) {
-          await tx.product.update({
-            where: { id: detail.productId },
+        for (const detail of details) {
+          await tx.ticket.update({
+            where: { id: detail.ticketId },
             data: { stock: { increment: detail.qty } },
           });
         }
       }
     });
 
-    return { message: "Update Transaction Success" };
+    return {
+      message: `${
+        body.type === "ACCEPT" ? "Accept" : "Reject"
+      } transaction success`,
+    };
   };
+
+  getUserTransactions = async ({
+    page,
+    take,
+    search,
+    userId,
+  }: {
+    page: number;
+    take: number;
+    search: string;
+    userId: number;
+  }) => {
+    const [transactions, total] = await Promise.all([
+      this.prisma.transaction.findMany({
+        where: {
+          userId,
+          event: {
+            title: {
+              contains: search,
+              mode: "insensitive",
+            },
+          },
+        },
+        skip: (page - 1) * take,
+        take,
+        orderBy: { createdAt: "desc" },
+        include: {
+          event: {
+            select: {
+              title: true,
+              location: true,
+              thumbnail: true,
+              startDate: true,
+              endDate: true,
+            },
+          },
+        },
+      }),
+      this.prisma.transaction.count({
+        where: {
+          userId,
+          event: {
+            title: {
+              contains: search,
+              mode: "insensitive",
+            },
+          },
+        },
+      }),
+    ]);
+
+    const formatted = transactions.map((tx) => ({
+      uuid: tx.uuid,
+      title: tx.event.title,
+      location: tx.event.location,
+      image: tx.event.thumbnail,
+      status: tx.status,
+      dateRange: `${tx.event.startDate.toLocaleDateString(
+        "id-ID"
+      )} - ${tx.event.endDate.toLocaleDateString("id-ID")}`,
+    }));
+
+    return {
+      data: formatted,
+      meta: {
+        total,
+        page,
+        take,
+      },
+    };
+  };
+
+  applyVoucher = async (
+    uuid: string,
+    code: string,
+    userId: number
+  ): Promise<{ pricing: { totalTicketPrice: number; total: number } }> => {
+    const transaction = await this.prisma.transaction.findFirst({
+      where: { uuid, userId },
+      include: {
+        transactionDetail: {
+          include: {
+            ticket: true,
+          },
+        },
+      },
+    });
+
+    if (!transaction) throw new ApiError("Transaction not found", 404);
+
+    const voucher = await this.prisma.voucher.findFirst({
+      where: { code, eventId: transaction.eventId },
+    });
+
+    if (!voucher) throw new ApiError("Voucher not found or invalid", 400);
+    if (voucher.stock <= 0) throw new ApiError("Voucher limit exceeded", 400);
+
+    const totalTicketPrice = transaction.transactionDetail.reduce(
+      (acc, detail) => acc + detail.qty * (detail.ticket.price ?? 0),
+      0
+    );
+
+    const discount = voucher.value;
+    const total = Math.max(0, totalTicketPrice - discount);
+
+    await this.prisma.transaction.update({
+      where: { uuid },
+      data: { voucherId: voucher.id },
+    });
+
+    await this.prisma.voucher.update({
+      where: { id: voucher.id },
+      data: { stock: { decrement: 1 } },
+    });
+
+    return {
+      pricing: {
+        totalTicketPrice,
+        total,
+      },
+    };
+  };
+  
 }
